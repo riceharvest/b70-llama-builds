@@ -19,7 +19,9 @@ ONEAPI_DEVICE_SELECTOR=level_zero:0 ./llama-server -m /path/to/model.gguf -ngl 9
 
 Requirements: glibc 2.39+ (Ubuntu 24.04+, Fedora 40+, Debian 13+). SYCL needs the Intel GPU driver
 (compute-runtime + Level Zero loader); Vulkan needs Mesa ANV. [b70-doctor](https://github.com/riceharvest/b70-doctor)
-checks both. Each tarball has a `README.md` and `BUILDINFO.txt` (exact source commit, toolchain, CI run).
+checks both. To benchmark these builds and add your numbers to the shared table in one command:
+`curl -fsSL https://raw.githubusercontent.com/riceharvest/b70-bench/main/b70-bench.sh | bash -s -- --prebuilt --tier quick`
+([b70-bench](https://github.com/riceharvest/b70-bench)). Each tarball has a `README.md` and `BUILDINFO.txt` (exact source commit, toolchain, CI run).
 
 ## What is pinned
 
