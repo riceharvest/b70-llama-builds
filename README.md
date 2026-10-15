@@ -31,6 +31,7 @@ a new release.
 - Vulkan: [riceharvest/llama.cpp `vk-b70-stack`](https://github.com/riceharvest/llama.cpp/tree/vk-b70-stack)
   `54b6e8485`, Vulkan SDK 1.4.363.0. On a B70 with Mesa 25.3.6 it took Qwen3.8-27B decode from 13.2 to 22.7 tok/s
   and Qwen3.6-35B-A3B from 39 to 64 tok/s vs upstream master. These fixes are not upstream (yet).
+  What each fix does and how to reproduce the numbers: [branch docs](https://github.com/riceharvest/llama.cpp/blob/b70-docs/README.md).
 
 ## What CI checks (no GPU on the runners)
 
