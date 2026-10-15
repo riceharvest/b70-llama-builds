@@ -8,6 +8,7 @@ BOLT_GGUF=NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf
 BOLT_MMPROJ=mmproj-NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf
 BOLT_DRAFT_REPO=nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr-GGUF
 BOLT_DRAFT=NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr.gguf
+BOLT_OURS=${BOLT_OURS_REPO:-darioooooo0o/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-GGUF}
 usage() {
   cat <<'U'
 b70-llama: llama.cpp for the Intel Arc Pro B70 (SYCL + Vulkan in one image)
@@ -18,10 +19,11 @@ commands:
   vulkan <llama-server args>   serve with the Vulkan build (Mesa 26 in the image); --host 0.0.0.0 --port 8080 -ngl 99 are added
   sycl   <llama-server args>   serve with the SYCL build (AOT for the B70, oneAPI runtime bundled)
   bench  sycl|vulkan <llama-bench args>
-  bolt   [--no-draft] [--no-vision] [llama-server args]
+  bolt   [--quant Q4_K_M|IQ4_XS|...] [--no-draft] [--no-vision] [llama-server args]
                                NVIDIA Nemotron 3.5 Bolt 74B-A9B (24 GB GGUF + vision + LiLiCorr drafter) on Vulkan:
                                downloads it into /models/bolt on first use (~22 GB), then serves on :8080.
-                               BOLT_MODEL=/models/<other>.gguf serves another Bolt GGUF the same way
+                               --quant <type>: a 3- to 8-bit file from the BF16 weights instead (larger than VRAM: llama.cpp's
+                               --fit keeps part of the experts in system RAM). BOLT_MODEL=/models/<x>.gguf: any other file
   get    <hf-repo> <file> [name]  download a GGUF from Hugging Face into /models[/name] (resumes)
   run    sycl|vulkan <binary> <args>   any binary of a build, e.g. llama-cli
   info                         versions and the GPUs each backend sees
@@ -72,16 +74,34 @@ case "$cmd" in
     curl -fL -C - --retry 5 ${HF_TOKEN:+-H "Authorization: Bearer $HF_TOKEN"} -o "$out.part" "https://huggingface.co/$repo/resolve/main/$file"
     mv "$out.part" "$out"; echo "done: $out" ;;
   bolt)
-    need_dri; b=$(bin vulkan llama-server); draft=1; vision=1; args=()
-    for a in "$@"; do case "$a" in --no-draft) draft=0 ;; --no-vision) vision=0 ;; *) args+=("$a") ;; esac; done
+    need_dri; b=$(bin vulkan llama-server); draft=1; vision=1; quant=""; args=()
+    while [ $# -gt 0 ]; do case "$1" in
+      --no-draft) draft=0 ;; --no-vision) vision=0 ;;
+      --quant) quant=${2:?--quant needs a type, e.g. IQ4_XS}; shift ;;
+      *) args+=("$1") ;; esac; shift; done
+    case "$quant" in *[!A-Za-z0-9_]*) echo "bad --quant: $quant" >&2; exit 2 ;; esac
     d=$M/bolt; mkdir -p "$d"
     fetch() { [ -s "$d/$2" ] || B70_MODELS_DIR=$d "$0" get "$1" "$2" >&2; }
-    model=${BOLT_MODEL:-}
-    if [ -z "$model" ]; then fetch $BOLT_REPO $BOLT_GGUF; model=$d/$BOLT_GGUF; fi
-    extra=(--host 0.0.0.0 --port 8080 -ngl 99 -fa on -c 32768 -np 1 --jinja --temp 1.0 --top-p 0.95 -m "$model")
+    model=${BOLT_MODEL:-}; ngl=(-ngl 99)
+    if [ -z "$model" ] && [ -n "$quant" ]; then
+      # single file at the repo root, or llama-gguf-split parts in a folder named after the type
+      listing=$(curl -fsSL ${HF_TOKEN:+-H "Authorization: Bearer $HF_TOKEN"} "https://huggingface.co/api/models/$BOLT_OURS" \
+                | grep -oE '"rfilename": *"[^"]+\.gguf"' | sed -E 's/.*"([^"]+)"$/\1/') || true
+      files=$(echo "$listing" | grep -E "^($quant/[^/]+|[^/]+-$quant)\.gguf$" | grep -v '^mmproj-' | sort) || true
+      [ -n "$files" ] || { echo "no $quant file in $BOLT_OURS (yet?)" >&2; exit 2; }
+      for f in $files; do
+        sub=$(dirname "$f"); [ "$sub" = . ] && sub= || mkdir -p "$d/$sub"
+        [ -s "$d/$f" ] || B70_MODELS_DIR=$d${sub:+/$sub} "$0" get "$BOLT_OURS" "$f" >&2
+      done
+      model=$d/$(echo "$files" | head -1); ngl=()   # bigger than VRAM: let --fit choose the GPU / RAM split
+      ours_mmproj=$(echo "$listing" | grep -E '^mmproj-.*-Q8_0\.gguf$' | head -1) || true
+    elif [ -z "$model" ]; then fetch $BOLT_REPO $BOLT_GGUF; model=$d/$BOLT_GGUF; fi
+    extra=(--host 0.0.0.0 --port 8080 "${ngl[@]}" -fa on -c 32768 -np 1 --jinja --temp 1.0 --top-p 0.95 -m "$model")
     if [ $vision = 1 ]; then
       # the vision encoder (1.7 GB) stays on the CPU: images take ~5 s, and the VRAM goes to context + the drafter
-      fetch $BOLT_REPO $BOLT_MMPROJ; extra+=(--mmproj "$d/$BOLT_MMPROJ" --no-mmproj-offload)
+      if [ -n "${ours_mmproj:-}" ]; then fetch "$BOLT_OURS" "$ours_mmproj"; mm=$d/$ours_mmproj   # same BF16 weights as --quant
+      else fetch $BOLT_REPO $BOLT_MMPROJ; mm=$d/$BOLT_MMPROJ; fi
+      extra+=(--mmproj "$mm" --no-mmproj-offload)
     fi
     if [ $draft = 1 ]; then
       # LiLiCorr speculative decoding: +27% on code on a B70 (Mesa 26), no gain on prose; --no-draft saves ~1 GB VRAM

@@ -35,6 +35,9 @@ mkdir -p ~/models && alias b70='docker run --rm -it --device /dev/dri -v ~/model
 # NVIDIA Nemotron 3.5 Bolt 74B-A9B, one command: NVIDIA's 24 GB GGUF + vision + LiLiCorr drafter, downloaded on first use
 # (~22 GB into ~/models/bolt). On a B70 (Mesa 26): 43 tok/s, 54 tok/s on code with the drafter. --no-draft / --no-vision
 b70 bolt
+# or a 3- to 8-bit file made from the BF16 weights (darioooooo0o/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-GGUF); llama.cpp's
+# --fit keeps the experts that do not fit the 32 GB in system RAM
+b70 bolt --quant IQ4_XS
 # Qwen3.6-35B-A3B with its MTP head (Vulkan + MTP n=3: 108.5 tok/s with identical output on Mesa 25; the image has Mesa 26)
 b70 get unsloth/Qwen3.6-35B-A3B-MTP-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf Qwen3.6-35B-A3B-MTP-UD-Q4_K_M.gguf
 b70 vulkan -m /models/Qwen3.6-35B-A3B-MTP-UD-Q4_K_M.gguf -fa on -c 32768 --spec-type draft-mtp --spec-draft-n-max 3

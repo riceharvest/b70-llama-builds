@@ -22,7 +22,7 @@ F
 done
 run() { B70_LLAMA_DIR="$TMP/llama" B70_SKIP_DRI_CHECK=1 bash "$HERE/b70-llama" "$@" 2>&1; }
 # fake curl: writes the -o file, no network
-mkdir -p "$TMP/fakebin"; printf '%s\n' '#!/usr/bin/env bash' 'while [ $# -gt 0 ]; do [ "$1" = -o ] && echo fake > "$2"; shift; done' > "$TMP/fakebin/curl"; chmod +x "$TMP/fakebin/curl"
+mkdir -p "$TMP/fakebin"; printf '%s\n' '#!/usr/bin/env bash' 'for x in "$@"; do case "$x" in *api/models/*) printf "%s" "$FAKE_API_JSON"; exit 0 ;; esac; done' 'while [ $# -gt 0 ]; do [ "$1" = -o ] && echo fake > "$2"; shift; done' > "$TMP/fakebin/curl"; chmod +x "$TMP/fakebin/curl"
 o=$(run vulkan -m /models/x.gguf); check one "$o" '^ARGS: --host 0.0.0.0 --port 8080 -ngl 99 -m /models/x.gguf$'; refute one "$o" 'GPUs visible'
 export FAKE_DEVICES='  SYCL0: Intel(R) Arc(TM) Graphics (47000 MiB, 46000 MiB free)
   SYCL1: Intel(R) Arc(TM) Pro B70 Graphics (31000 MiB, 30000 MiB free)'
@@ -45,4 +45,16 @@ o=$(B70_MODELS_DIR="$TMP/models" BOLT_MODEL=/models/own-Q4_K_M.gguf run bolt --n
 rm "$TMP/models/bolt/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr.gguf"
 o=$(B70_MODELS_DIR="$TMP/models" PATH="$TMP/fakebin:$PATH" run bolt); check bolt-fetch "$o" 'downloading nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr-GGUF/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr.gguf'
 check bolt-fetch "$o" '^ARGS: .*--spec-draft-model'
+# bolt --quant: our repo (single file at the root, or split parts in a folder), no -ngl (llama.cpp --fit decides)
+export FAKE_API_JSON='{"siblings":[{"rfilename":"README.md"},{"rfilename":"NVIDIA-Nemotron-3.5-Bolt-74B-A9B-IQ4_XS.gguf"},{"rfilename":"Q8_0/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-Q8_0-00002-of-00002.gguf"},{"rfilename":"Q8_0/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-Q8_0-00001-of-00002.gguf"},{"rfilename":"mmproj-NVIDIA-Nemotron-3.5-Bolt-74B-A9B-Q8_0.gguf"}]}'
+rq() { B70_MODELS_DIR="$TMP/models" PATH="$TMP/fakebin:$PATH" run bolt "$@"; }
+o=$(rq --quant IQ4_XS --no-draft); check quant "$o" "downloading darioooooo0o/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-GGUF/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-IQ4_XS.gguf"
+check quant "$o" "^ARGS: --host 0.0.0.0 --port 8080 -fa on -c 32768 .* -m $TMP/models/bolt/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-IQ4_XS.gguf --mmproj"
+refute quant "$o" ' -ngl 99'
+check quant "$o" "--mmproj $TMP/models/bolt/mmproj-NVIDIA-Nemotron-3.5-Bolt-74B-A9B-Q8_0.gguf"
+o=$(rq --quant Q8_0 --no-draft --no-vision); check quant-split "$o" 'downloading .*/Q8_0/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-Q8_0-00002-of-00002.gguf'
+check quant-split "$o" "^ARGS: .* -m $TMP/models/bolt/Q8_0/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-Q8_0-00001-of-00002.gguf$"
+[ -s "$TMP/models/bolt/Q8_0/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-Q8_0-00002-of-00002.gguf" ] && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "FAIL [quant-split]: part 2 not downloaded"; }
+o=$(rq --quant Q5_K_M); check quant-missing "$o" 'no Q5_K_M file in darioooooo0o'
+o=$(rq --quant 'Q4/../x'); check quant-bad "$o" 'bad --quant'
 echo "passed $PASS, failed $FAIL"; [ "$FAIL" = 0 ]
