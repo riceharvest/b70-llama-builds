@@ -227,7 +227,7 @@ jobs:
           {
             echo "llama.cpp for the Intel Arc Pro B70 (Linux x86-64, glibc >= 2.39)."
             echo
-            echo "- **SYCL**: $SYCL_REPO @ \`$SYCL_REF\`, AOT bmg-g31-a0, F16, oneDNN, oneAPI $ONEAPI_VERSION runtime bundled. Needs Intel compute-runtime (Level Zero) on the host."
+            echo "- **SYCL**: $SYCL_REPO @ \`$SYCL_REF\` (\`sycl-b70-release\`: upstream + B70 SYCL fixes), AOT bmg-g31-a0, F16, oneDNN, oneAPI $ONEAPI_VERSION runtime bundled. Needs Intel compute-runtime (Level Zero) on the host."
             echo "- **Vulkan**: $VULKAN_REPO \`vk-b70-stack\` @ \`$VULKAN_REF\` (upstream master + B70 decode/prefill fixes). Needs Mesa ANV."
             echo
             echo "Verify: \`sha256sum -c SHA256SUMS\`. Built by ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
