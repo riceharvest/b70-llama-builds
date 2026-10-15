@@ -53,10 +53,13 @@ that every library resolves and the Vulkan build runs on lavapipe (no GPU there)
 a new release.
 
 - SYCL: [riceharvest/llama.cpp `sycl-b70-release`](https://github.com/riceharvest/llama.cpp/tree/sycl-b70-release)
-  `354dfa342` = upstream `a0e6dc738` + B70 SYCL fixes: the qwen35moe decode fusions (on by default; set
+  `56cb978b7` = upstream `a0e6dc738` + B70 SYCL fixes: the qwen35moe decode fusions (on by default; set
   `GGML_SYCL_ENABLE_FUSION=0` to turn them all off), the fused MoE GEMV for 2-8 token batches (makes MTP faster than no
-  MTP), and a flash-attention KV split sized for Xe2. Measured on a B70 (Qwen3.6-35B-A3B UD-Q4_K_M): decode
-  93.4 -> 107.9 tok/s with the fusions, MTP n=3 80.9 -> 131.8 tok/s with the MoE GEMV; together: TODO(012).
+  MTP), a flash-attention KV split sized for Xe2, GQA padding in the tile FA kernel (`GGML_SYCL_FA_TILE_GQA_PAD=0` turns
+  it off) and a oneDNN alignment fix. Measured on a B70: Qwen3.6-35B-A3B UD-Q4_K_M decode 93.4 -> 107.9 tok/s with the
+  fusions; MTP n=3 80.9 -> 131.8 tok/s with the MoE GEMV; both together +39% over fusions alone (121.7 vs 87.5 tok/s in
+  one session that ran ~8% below the others); at 32K context 64.1 -> 75.2 tok/s with the FA split. Qwen3.8-27B UD-Q4_K_XL
+  at 32K: 14.6 -> 18.6 tok/s with the FA split + GQA padding. TODO(025): release-candidate check before merging.
   oneAPI 2025.3 from Intel's apt repo, ocloc from compute-runtime 26.27.
 - Vulkan: [riceharvest/llama.cpp `vk-b70-stack`](https://github.com/riceharvest/llama.cpp/tree/vk-b70-stack)
   `54b6e8485`, Vulkan SDK 1.4.363.0. On a B70 with Mesa 25.3.6 it took Qwen3.8-27B decode from 13.2 to 22.7 tok/s
