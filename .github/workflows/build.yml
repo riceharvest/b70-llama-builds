@@ -90,7 +90,7 @@ jobs:
           mkdir -p build/bin/licenses/oneapi
           find -L /opt/intel/oneapi/compiler/$ONEAPI_VERSION /opt/intel/oneapi/mkl/$ONEAPI_VERSION /opt/intel/oneapi/dnnl/$ONEAPI_VERSION \
                /opt/intel/oneapi/tbb /opt/intel/oneapi/umf /opt/intel/oneapi/licensing -maxdepth 4 -type f \
-               \( -iname '*licen*' -o -iname 'third-party-programs*' \) 2>/dev/null | while read -r f; do
+               \( -iname '*licen*' -o -iname 'third-party-programs*' \) ! -name '*.filelist' 2>/dev/null | while read -r f; do
             d=build/bin/licenses/oneapi/$(echo "${f#/opt/intel/oneapi/}" | tr '/' '_'); cp "$f" "$d"; done
           cp src/LICENSE build/bin/licenses/llama.cpp-LICENSE
           ls build/bin/licenses/oneapi | head -50
