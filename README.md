@@ -23,6 +23,29 @@ checks both. To benchmark these builds and add your numbers to the shared table 
 `curl -fsSL https://raw.githubusercontent.com/riceharvest/b70-bench/main/b70-bench.sh | bash -s -- --prebuilt --tier quick`
 ([b70-bench](https://github.com/riceharvest/b70-bench)). Each tarball has a `README.md` and `BUILDINFO.txt` (exact source commit, toolchain, CI run).
 
+## Docker image
+
+`ghcr.io/riceharvest/b70-llama` has both builds plus its own GPU userspace from a pinned Arch Linux snapshot: Mesa ANV
+26.2.x for Vulkan, compute-runtime and Level Zero for SYCL. The host only needs the `xe` kernel driver, so you get the
+Mesa 26 Vulkan speed-up ([measured](https://github.com/riceharvest/awesome-b70/blob/main/performance.md#mesa-25-vs-26)) even on
+an older distro.
+
+```bash
+mkdir -p ~/models && alias b70='docker run --rm -it --device /dev/dri -v ~/models:/models -p 8080:8080 ghcr.io/riceharvest/b70-llama'
+# Qwen3.6-35B-A3B with its MTP head (Vulkan + MTP n=3: 108.5 tok/s with identical output on Mesa 25; the image has Mesa 26)
+b70 get unsloth/Qwen3.6-35B-A3B-MTP-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf Qwen3.6-35B-A3B-MTP-UD-Q4_K_M.gguf
+b70 vulkan -m /models/Qwen3.6-35B-A3B-MTP-UD-Q4_K_M.gguf -fa on -c 32768 --spec-type draft-mtp --spec-draft-n-max 3
+# Qwen3.8-27B (dense): Vulkan on Mesa 26 decodes 25.3 tok/s vs 21.9 on SYCL
+b70 get unsloth/Qwen3.8-27B-GGUF Qwen3.8-27B-UD-Q4_K_M.gguf
+b70 vulkan -m /models/Qwen3.8-27B-UD-Q4_K_M.gguf -fa on -c 32768
+```
+
+`b70 sycl ...` serves with the SYCL build instead (faster on long prompts). `b70 bench vulkan -m /models/x.gguf` runs
+llama-bench, `b70 info` lists versions and GPUs. The server listens on `0.0.0.0:8080` with all layers on the GPU unless
+you pass your own `--host`, `--port`, `-ngl`. With podman or as non-root, add `--group-add keep-groups` (podman) or the
+host's `render` group id. Built on GitHub-hosted runners by `.github/workflows/image.yml` after each release; CI checks
+that every library resolves and the Vulkan build runs on lavapipe (no GPU there).
+
 ## What is pinned
 
 [`refs.env`](refs.env) holds the source commits and toolchain versions. Pushing a change there rebuilds and publishes

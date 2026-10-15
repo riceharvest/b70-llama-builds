@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Entry point of ghcr.io/riceharvest/b70-llama. https://github.com/riceharvest/b70-llama-builds
+set -euo pipefail
+L=/opt/llama
+usage() {
+  cat <<'U'
+b70-llama: llama.cpp for the Intel Arc Pro B70 (SYCL + Vulkan in one image)
+
+  docker run --rm -it --device /dev/dri -v ~/models:/models -p 8080:8080 ghcr.io/riceharvest/b70-llama <command>
+
+commands:
+  vulkan <llama-server args>   serve with the Vulkan build (Mesa 26 in the image); --host 0.0.0.0 --port 8080 -ngl 99 are added
+  sycl   <llama-server args>   serve with the SYCL build (AOT for the B70, oneAPI runtime bundled)
+  bench  sycl|vulkan <llama-bench args>
+  get    <hf-repo> <file> [name]  download a GGUF from Hugging Face into /models[/name] (resumes)
+  run    sycl|vulkan <binary> <args>   any binary of a build, e.g. llama-cli
+  info                         versions and the GPUs each backend sees
+U
+}
+need_dri() { [ -e /dev/dri ] || { echo "no /dev/dri in the container: add --device /dev/dri" >&2; exit 2; }; }
+bin() { # backend name
+  case "$1" in sycl|vulkan) [ -x "$L/$1/$2" ] || { echo "no $2 in the $1 build" >&2; exit 2; }; echo "$L/$1/$2" ;;
+    *) echo "backend must be sycl or vulkan, got '$1'" >&2; exit 2 ;; esac
+}
+has_arg() { local a=$1; shift; for x in "$@"; do [ "$x" = "$a" ] && return 0; done; return 1; }
+cmd=${1:-help}; [ $# -gt 0 ] && shift
+case "$cmd" in
+  vulkan|sycl)
+    need_dri; b=$(bin "$cmd" llama-server); extra=()
+    has_arg --host "$@" || extra+=(--host 0.0.0.0)
+    has_arg --port "$@" || extra+=(--port 8080)
+    has_arg -ngl "$@" || has_arg --n-gpu-layers "$@" || extra+=(-ngl 99)
+    exec "$b" "${extra[@]}" "$@" ;;
+  bench) need_dri; b=$(bin "${1:-}" llama-bench); shift; exec "$b" "$@" ;;
+  run) need_dri; b=$(bin "${1:-}" "${2:-}"); shift 2; exec "$b" "$@" ;;
+  get)
+    repo=${1:?usage: get <hf-repo> <file> [name]}; file=${2:?usage: get <hf-repo> <file> [name]}; name=${3:-$(basename "$file")}
+    case "$repo$file$name" in *..*|*[!A-Za-z0-9._/-]*) echo "unexpected repo or file name" >&2; exit 2 ;; esac
+    out=/models/$(basename "$name")
+    echo "downloading $repo/$file -> $out"
+    curl -fL -C - --retry 5 ${HF_TOKEN:+-H "Authorization: Bearer $HF_TOKEN"} -o "$out.part" "https://huggingface.co/$repo/resolve/main/$file"
+    mv "$out.part" "$out"; echo "done: $out" ;;
+  info)
+    echo "release: $(cat $L/RELEASE)"
+    pacman -Q vulkan-intel intel-compute-runtime level-zero-loader 2>/dev/null | sed 's/^/package: /'
+    if [ -e /dev/dri ]; then
+      echo "Vulkan devices:"; "$L/vulkan/llama-bench" --list-devices 2>/dev/null | sed -n '2,$p' || true
+      echo "SYCL devices:";   "$L/sycl/llama-bench" --list-devices 2>/dev/null | sed -n '2,$p' || true
+    else echo "(no /dev/dri: start with --device /dev/dri to list GPUs)"; fi ;;
+  help|-h|--help) usage ;;
+  *) echo "unknown command: $cmd" >&2; usage >&2; exit 2 ;;
+esac

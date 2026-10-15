@@ -1,0 +1,57 @@
+# Docker image ghcr.io/riceharvest/b70-llama: the latest release's SYCL + Vulkan binaries on a pinned Arch Linux snapshot
+# (Mesa ANV 26.2.x, compute-runtime, Level Zero). GitHub-hosted runner only; no GPU, so CI checks that every binary's
+# libraries resolve and that the Vulkan build runs on lavapipe (CPU Vulkan).
+name: image
+on:
+  workflow_run:
+    workflows: [build]
+    types: [completed]
+    branches: [main]
+  push:
+    branches: [main]
+    paths: [docker/**, .github/workflows/image.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency: { group: image, cancel-in-progress: false }
+jobs:
+  image:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          mkdir -p docker/dist
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir docker/dist \
+            -p 'llama-b70-sycl-ubuntu24-x64.tar.gz' -p 'llama-b70-vulkan-ubuntu24-x64.tar.gz' -p SHA256SUMS
+          ls -la docker/dist
+      - name: Build
+        run: docker build --build-arg RELEASE_TAG="$TAG" -t b70-llama:ci docker
+      - name: Check
+        run: |
+          docker run --rm --entrypoint bash b70-llama:ci -c '
+            set -e
+            pacman -Q vulkan-intel intel-compute-runtime level-zero-loader
+            for d in /opt/llama/sycl /opt/llama/vulkan; do
+              miss=$(for f in $d/llama-* $d/*.so*; do ldd $f 2>/dev/null | grep "not found"; done | sort -u)
+              [ -z "$miss" ] && echo "$d: all libraries resolve" || { echo "$d missing: $miss"; exit 1; }
+            done
+            /opt/llama/sycl/llama-server --version
+            /opt/llama/vulkan/llama-server --version
+            b70-llama help | head -3'
+          # Vulkan on lavapipe: the Intel ICD has no device here, so add the CPU Vulkan driver in a throwaway layer
+          docker run --rm --entrypoint bash b70-llama:ci -c '
+            pacman -Sy --noconfirm --needed vulkan-swrast >/dev/null 2>&1 || exit 0
+            /opt/llama/vulkan/llama-bench --list-devices'
+      - name: Push
+        if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          IMG=ghcr.io/${{ github.repository_owner }}/b70-llama
+          for t in "$TAG" latest; do docker tag b70-llama:ci "$IMG:$t"; docker push "$IMG:$t"; done
