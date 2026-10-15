@@ -17,7 +17,7 @@ commands:
   info                         versions and the GPUs each backend sees
 U
 }
-need_dri() { [ -e /dev/dri ] || { echo "no /dev/dri in the container: add --device /dev/dri" >&2; exit 2; }; }
+need_dri() { [ -e /dev/dri ] || [ "${B70_SKIP_DRI_CHECK:-0}" = 1 ] || { echo "no /dev/dri in the container: add --device /dev/dri" >&2; exit 2; }; }
 bin() { # backend name
   case "$1" in sycl|vulkan) [ -x "$L/$1/$2" ] || { echo "no $2 in the $1 build" >&2; exit 2; }; echo "$L/$1/$2" ;;
     *) echo "backend must be sycl or vulkan, got '$1'" >&2; exit 2 ;; esac

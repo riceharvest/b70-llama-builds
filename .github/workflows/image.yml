@@ -45,10 +45,20 @@ jobs:
             /opt/llama/sycl/llama-server --version
             /opt/llama/vulkan/llama-server --version
             b70-llama help | head -3'
-          # Vulkan on lavapipe: the Intel ICD has no device here, so add the CPU Vulkan driver in a throwaway layer
-          docker run --rm --entrypoint bash b70-llama:ci -c '
-            pacman -Sy --noconfirm --needed vulkan-swrast >/dev/null 2>&1 || exit 0
-            /opt/llama/vulkan/llama-bench --list-devices'
+          # Vulkan on lavapipe (CPU Vulkan; no GPU here), through the entry script: a tiny model generates text, and
+          # `b70-llama vulkan` serves it and answers /health
+          curl -sSL -o /tmp/stories260K.gguf https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K.gguf
+          docker run --rm -v /tmp/stories260K.gguf:/models/tiny.gguf:ro -e B70_SKIP_DRI_CHECK=1 -e GGML_VK_VISIBLE_DEVICES=0 \
+            --entrypoint bash b70-llama:ci -c '
+            set -e
+            pacman -Sy --noconfirm --needed vulkan-swrast >/dev/null
+            b70-llama run vulkan llama-completion -m /models/tiny.gguf -dev Vulkan0 -ngl 99 -n 32 --temp 0 -no-cnv \
+              -p "Once upon a time" 2>/dev/null | tee /tmp/out.txt
+            [ "$(wc -c < /tmp/out.txt)" -gt 40 ]
+            b70-llama vulkan -m /models/tiny.gguf -dev Vulkan0 > /tmp/server.log 2>&1 &
+            for i in $(seq 1 60); do curl -sf localhost:8080/health && break; sleep 1; done
+            curl -sf localhost:8080/health || { tail -20 /tmp/server.log; exit 1; }
+            grep -m1 -i "vulkan0\|llvmpipe" /tmp/server.log || true'
       - name: Push
         if: github.event_name != 'push' || github.ref == 'refs/heads/main'
         run: |
