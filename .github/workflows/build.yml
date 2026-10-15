@@ -191,7 +191,7 @@ jobs:
           cp scripts/README-binaries.md build/bin/README.md
           cat > build/bin/BUILDINFO.txt <<EOF
           backend: Vulkan (+ all CPU variants), Vulkan SDK $VULKAN_SDK_VERSION shaders
-          source: $VULKAN_REPO @ $VULKAN_SHA (branch vk-b70-stack: upstream master + B70 fixes)
+          source: $VULKAN_REPO @ $VULKAN_SHA (fork with the B70 fixes: upstream master + the vk-b70-stack commits)
           builder: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           needs on the host: Mesa ANV (Vulkan loader libvulkan.so.1), glibc >= 2.39
           EOF
