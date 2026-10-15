@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Entry point of ghcr.io/riceharvest/b70-llama. https://github.com/riceharvest/b70-llama-builds
 set -euo pipefail
-L=/opt/llama
+L=${B70_LLAMA_DIR:-/opt/llama}
 usage() {
   cat <<'U'
 b70-llama: llama.cpp for the Intel Arc Pro B70 (SYCL + Vulkan in one image)
@@ -23,6 +23,25 @@ bin() { # backend name
     *) echo "backend must be sycl or vulkan, got '$1'" >&2; exit 2 ;; esac
 }
 has_arg() { local a=$1; shift; for x in "$@"; do [ "$x" = "$a" ] && return 0; done; return 1; }
+# pick_dev BIN: with more than one GPU visible (e.g. an Intel iGPU next to the B70), print the Battlemage one (else the
+# largest); nothing when there is only one
+pick_dev() {
+  "$1" --list-devices 2>/dev/null | awk '
+    match($0, /^ +([^ :]+): (.*) \(([0-9]+) MiB, [0-9]+ MiB free\)/, m) {
+      n++; bmg = (m[2] ~ /Arc\(TM\) (Pro )?B[0-9]+|Battlemage|BMG|B70/) ? 1 : 0
+      if (!best || bmg > bb || (bmg == bb && m[3] + 0 > bm)) { best = m[1]; bb = bmg; bm = m[3] + 0; bd = m[2] }
+    }
+    END { if (n > 1) print best "\t" bd "\t" n }'
+}
+dev_args() { # BIN ARGS... -> prints "-dev NAME" (and a note on stderr) unless the user chose a device
+  local b=$1; shift
+  has_arg -dev "$@" || has_arg --device "$@" || [ "${B70_NO_DEVICE_PICK:-0}" = 1 ] && return 0
+  local p; p=$(pick_dev "$b") || true
+  [ -n "$p" ] || return 0
+  IFS=$'\t' read -r name desc n <<< "$p"
+  echo "b70-llama: $n GPUs visible, using $name ($desc); pass -dev to choose another" >&2
+  printf '%s\n' -dev "$name"
+}
 cmd=${1:-help}; [ $# -gt 0 ] && shift
 case "$cmd" in
   vulkan|sycl)
@@ -30,8 +49,10 @@ case "$cmd" in
     has_arg --host "$@" || extra+=(--host 0.0.0.0)
     has_arg --port "$@" || extra+=(--port 8080)
     has_arg -ngl "$@" || has_arg --n-gpu-layers "$@" || extra+=(-ngl 99)
+    mapfile -t dv < <(dev_args "$b" "$@"); extra+=("${dv[@]}")
     exec "$b" "${extra[@]}" "$@" ;;
-  bench) need_dri; b=$(bin "${1:-}" llama-bench); shift; exec "$b" "$@" ;;
+  bench) need_dri; b=$(bin "${1:-}" llama-bench); shift
+    mapfile -t dv < <(dev_args "$b" "$@"); exec "$b" "${dv[@]}" "$@" ;;
   run) need_dri; b=$(bin "${1:-}" "${2:-}"); shift 2; exec "$b" "$@" ;;
   get)
     repo=${1:?usage: get <hf-repo> <file> [name]}; file=${2:?usage: get <hf-repo> <file> [name]}; name=${3:-$(basename "$file")}

@@ -42,7 +42,8 @@ b70 vulkan -m /models/Qwen3.8-27B-UD-Q4_K_M.gguf -fa on -c 32768
 
 `b70 sycl ...` serves with the SYCL build instead (faster on long prompts). `b70 bench vulkan -m /models/x.gguf` runs
 llama-bench, `b70 info` lists versions and GPUs. The server listens on `0.0.0.0:8080` with all layers on the GPU unless
-you pass your own `--host`, `--port`, `-ngl`. With podman or as non-root, add `--group-add keep-groups` (podman) or the
+you pass your own `--host`, `--port`, `-ngl`. If more than one GPU is visible (an Intel iGPU next to the B70, say), it serves on
+the Battlemage card and says which; `-dev` picks another. With podman or as non-root, add `--group-add keep-groups` (podman) or the
 host's `render` group id. Built on GitHub-hosted runners by `.github/workflows/image.yml` after each release; CI checks
 that every library resolves and the Vulkan build runs on lavapipe (no GPU there).
 

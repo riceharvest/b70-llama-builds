@@ -45,6 +45,8 @@ jobs:
             /opt/llama/sycl/llama-server --version
             /opt/llama/vulkan/llama-server --version
             b70-llama help | head -3'
+          # entry script: device pick with an iGPU next to the B70, user flags win, download name checks (fake binaries)
+          docker run --rm -v "$PWD/docker:/t:ro" --entrypoint bash b70-llama:ci /t/test.sh
           # Vulkan on lavapipe (CPU Vulkan; no GPU here), through the entry script: a tiny model generates text, and
           # `b70-llama vulkan` serves it and answers /health
           curl -sSL -o /tmp/stories260K.gguf https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K.gguf
