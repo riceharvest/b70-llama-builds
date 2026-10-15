@@ -32,6 +32,9 @@ an older distro.
 
 ```bash
 mkdir -p ~/models && alias b70='docker run --rm -it --device /dev/dri -v ~/models:/models -p 8080:8080 ghcr.io/riceharvest/b70-llama'
+# NVIDIA Nemotron 3.5 Bolt 74B-A9B, one command: NVIDIA's 24 GB GGUF + vision + LiLiCorr drafter, downloaded on first use
+# (~22 GB into ~/models/bolt). On a B70 (Mesa 26): 43 tok/s, 54 tok/s on code with the drafter. --no-draft / --no-vision
+b70 bolt
 # Qwen3.6-35B-A3B with its MTP head (Vulkan + MTP n=3: 108.5 tok/s with identical output on Mesa 25; the image has Mesa 26)
 b70 get unsloth/Qwen3.6-35B-A3B-MTP-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf Qwen3.6-35B-A3B-MTP-UD-Q4_K_M.gguf
 b70 vulkan -m /models/Qwen3.6-35B-A3B-MTP-UD-Q4_K_M.gguf -fa on -c 32768 --spec-type draft-mtp --spec-draft-n-max 3
@@ -52,10 +55,11 @@ that every library resolves and the Vulkan build runs on lavapipe (no GPU there)
 [`refs.env`](refs.env) holds the source commits and toolchain versions. Pushing a change there rebuilds and publishes
 a new release.
 
-- SYCL: upstream llama.cpp `a0e6dc738` (measured on a B70: Qwen3.6-35B-A3B UD-Q4_K_M decode 97.7 tok/s,
-  Qwen3.8-27B UD-Q4_K_XL 21.9 tok/s). oneAPI 2025.3 from Intel's apt repo, ocloc from compute-runtime 26.27.
-- Vulkan: [riceharvest/llama.cpp `vk-b70-stack`](https://github.com/riceharvest/llama.cpp/tree/vk-b70-stack)
-  `54b6e8485`, Vulkan SDK 1.4.363.0. On a B70 with Mesa 25.3.6 it took Qwen3.8-27B decode from 13.2 to 22.7 tok/s
+- SYCL: upstream llama.cpp `620d2225c` (2026-10-15; includes Nemotron 3.5 Bolt with vision, #30520, and the LiLiCorr
+  drafter, #30506). On the previous pin `a0e6dc738` a B70 measured Qwen3.6-35B-A3B UD-Q4_K_M decode 97.7 tok/s and
+  Qwen3.8-27B UD-Q4_K_XL 21.9 tok/s. oneAPI 2025.3 from Intel's apt repo, ocloc from compute-runtime 26.27.
+- Vulkan: [riceharvest/llama.cpp `vk-b70-stack-620`](https://github.com/riceharvest/llama.cpp/tree/vk-b70-stack-620)
+  `125b4cf66` (`vk-b70-stack` rebased onto the same master), Vulkan SDK 1.4.363.0. On a B70 with Mesa 25.3.6 it took Qwen3.8-27B decode from 13.2 to 22.7 tok/s
   and Qwen3.6-35B-A3B from 39 to 64 tok/s vs upstream master. These fixes are not upstream (yet).
   What each fix does and how to reproduce the numbers: [branch docs](https://github.com/riceharvest/llama.cpp/blob/b70-docs/README.md).
 

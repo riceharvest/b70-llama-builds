@@ -79,7 +79,7 @@ jobs:
             -DGGML_NATIVE=OFF -DLLAMA_OPENSSL=OFF -DLLAMA_CURL=OFF \
             -DGGML_SYCL=ON -DGGML_SYCL_TARGET=INTEL -DGGML_SYCL_F16=ON -DGGML_SYCL_DNN=ON \
             -DGGML_SYCL_DEVICE_ARCH=bmg-g31-a0 -DGGML_SYCL_MAX_PARALLEL_LINK_JOBS=2
-          time cmake --build build -j 3 --target llama-server llama-cli llama-bench llama-completion \
+          time cmake --build build -j 3 --target llama-server llama-cli llama-mtmd-cli llama-bench llama-completion \
             llama-quantize llama-perplexity llama-gguf-split llama-batched-bench test-backend-ops
 
       - name: Bundle oneAPI runtime
@@ -160,7 +160,7 @@ jobs:
           for f in GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT GGML_VULKAN_COOPMAT_GLSLC_SUPPORT; do
             grep -q -- "-D$f" build/compile_commands.json || { echo "glslc lacks $f"; exit 1; }
           done
-          cmake --build build -j $(nproc) --target llama-server llama-cli llama-bench llama-completion \
+          cmake --build build -j $(nproc) --target llama-server llama-cli llama-mtmd-cli llama-bench llama-completion \
             llama-quantize llama-perplexity llama-gguf-split llama-batched-bench test-backend-ops
 
       - name: Check every library resolves
