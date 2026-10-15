@@ -1,0 +1,235 @@
+name: build
+
+# Builds llama.cpp for the Intel Arc Pro B70 on GitHub-hosted runners and publishes a release:
+#   - SYCL: AOT for bmg-g31-a0 (no JIT at first start), F16, oneDNN, oneAPI runtime bundled.
+#   - Vulkan: the vk-b70-stack branch (B70 decode/prefill fixes), all CPU variants.
+# Sources and toolchain versions are pinned in refs.env.
+
+on:
+  push:
+    branches: [main]
+    paths: [refs.env, .github/workflows/build.yml, scripts/**]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a release
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sycl:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Load refs
+        run: grep -E '^[A-Z_]+=' refs.env >> "$GITHUB_ENV"
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+
+      - name: Install oneAPI ${{ env.ONEAPI_VERSION }} (Intel apt repo)
+        run: |
+          wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            intel-oneapi-compiler-dpcpp-cpp-$ONEAPI_VERSION \
+            intel-oneapi-mkl-sycl-devel-$ONEAPI_VERSION \
+            intel-oneapi-dnnl-devel-$ONEAPI_VERSION \
+            ninja-build patchelf file
+          df -h /
+
+      - name: Install ocloc (AOT compiler) and the Level Zero loader
+        run: |
+          mkdir /tmp/cr && cd /tmp/cr
+          # compute-runtime ${COMPUTE_RUNTIME_TAG} is the last release with an Ubuntu 24.04 install procedure
+          gh release download "$COMPUTE_RUNTIME_TAG" -R intel/compute-runtime -p 'intel-ocloc_*_amd64.deb' -p 'libigdgmm12_*_amd64.deb'
+          gh release download "$IGC_TAG" -R intel/intel-graphics-compiler -p 'intel-igc-core-2_*_amd64.deb' -p 'intel-igc-opencl-2_*_amd64.deb'
+          gh release download "v$LEVEL_ZERO_VERSION" -R oneapi-src/level-zero -p "libze1_${LEVEL_ZERO_VERSION}+u24.04_amd64.deb" -p "libze-dev_${LEVEL_ZERO_VERSION}+u24.04_amd64.deb"
+          ls
+          sudo apt-get install -y ./*.deb
+          ocloc query OCL_DRIVER_VERSION || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Fetch llama.cpp ${{ env.SYCL_REF }}
+        run: |
+          git clone --filter=blob:none "$SYCL_REPO" src
+          git -C src checkout "$SYCL_REF"
+          echo "SYCL_SHA=$(git -C src rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build (AOT bmg-g31-a0)
+        run: |
+          source /opt/intel/oneapi/setvars.sh --force
+          cmake -S src -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_NATIVE=OFF -DLLAMA_OPENSSL=OFF -DLLAMA_CURL=OFF \
+            -DGGML_SYCL=ON -DGGML_SYCL_TARGET=INTEL -DGGML_SYCL_F16=ON -DGGML_SYCL_DNN=ON \
+            -DGGML_SYCL_DEVICE_ARCH=bmg-g31-a0 -DGGML_SYCL_MAX_PARALLEL_LINK_JOBS=2
+          time cmake --build build -j 3 --target llama-server llama-cli llama-bench llama-completion \
+            llama-quantize llama-perplexity llama-gguf-split llama-batched-bench test-backend-ops
+
+      - name: Bundle oneAPI runtime
+        run: |
+          source /opt/intel/oneapi/setvars.sh --force
+          ONEAPI_ROOT=/opt/intel/oneapi bash scripts/bundle-oneapi.sh build/bin
+          # Intel license texts for the bundled runtime libraries
+          mkdir -p build/bin/licenses/oneapi
+          find -L /opt/intel/oneapi/compiler/$ONEAPI_VERSION /opt/intel/oneapi/mkl/$ONEAPI_VERSION /opt/intel/oneapi/dnnl/$ONEAPI_VERSION \
+               /opt/intel/oneapi/tbb /opt/intel/oneapi/umf /opt/intel/oneapi/licensing -maxdepth 4 -type f \
+               \( -iname '*licen*' -o -iname 'third-party-programs*' \) 2>/dev/null | while read -r f; do
+            d=build/bin/licenses/oneapi/$(echo "${f#/opt/intel/oneapi/}" | tr '/' '_'); cp "$f" "$d"; done
+          cp src/LICENSE build/bin/licenses/llama.cpp-LICENSE
+          ls build/bin/licenses/oneapi | head -50
+
+      - name: Check every library resolves without oneAPI installed
+        run: |
+          env -u LD_LIBRARY_PATH bash scripts/check-ldd.sh build/bin '^libze_loader\.so'
+
+      - name: Smoke test (no GPU on the runner)
+        run: |
+          cd build/bin
+          env -i PATH=/usr/bin:/bin HOME=$HOME ./llama-cli --version
+          env -i PATH=/usr/bin:/bin HOME=$HOME ./llama-server --help > /dev/null && echo "llama-server --help ok"
+
+      - name: Pack
+        run: |
+          N=llama-b70-sycl-ubuntu24-x64
+          cp scripts/README-binaries.md build/bin/README.md
+          cat > build/bin/BUILDINFO.txt <<EOF
+          backend: SYCL, AOT bmg-g31-a0, F16, oneDNN, oneAPI $ONEAPI_VERSION runtime bundled
+          source: $SYCL_REPO @ $SYCL_SHA
+          builder: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          needs on the host: Intel compute-runtime (Level Zero loader libze_loader.so.1 + libze_intel_gpu), glibc >= 2.39
+          EOF
+          tar -czf $N.tar.gz --transform "s,^\.,$N," -C build/bin .
+          sha256sum $N.tar.gz
+          ls -la $N.tar.gz
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sycl
+          path: llama-b70-sycl-ubuntu24-x64.tar.gz
+          retention-days: 7
+
+  vulkan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Load refs
+        run: grep -E '^[A-Z_]+=' refs.env >> "$GITHUB_ENV"
+
+      - name: Dependencies (Vulkan SDK ${{ env.VULKAN_SDK_VERSION }}, lavapipe for the smoke test)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential ninja-build mesa-vulkan-drivers libssl-dev
+          mkdir vulkan_sdk
+          curl -sSL "https://sdk.lunarg.com/sdk/download/$VULKAN_SDK_VERSION/linux/vulkan_sdk.tar.xz" | tar -xJ -C vulkan_sdk --strip-components=1
+
+      - name: Fetch llama.cpp ${{ env.VULKAN_REF }}
+        run: |
+          git clone --filter=blob:none "$VULKAN_REPO" src
+          git -C src checkout "$VULKAN_REF"
+          echo "VULKAN_SHA=$(git -C src rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          source vulkan_sdk/setup-env.sh
+          cmake -S src -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_VULKAN=ON -DLLAMA_OPENSSL=OFF -DLLAMA_CURL=OFF
+          # the B70 decode fix lives in the MMVQ shaders (integer dot) and the FA m8 shader (coopmat)
+          for f in GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT GGML_VULKAN_COOPMAT_GLSLC_SUPPORT; do
+            grep -q -- "-D$f" build/compile_commands.json || { echo "glslc lacks $f"; exit 1; }
+          done
+          cmake --build build -j $(nproc) --target llama-server llama-cli llama-bench llama-completion \
+            llama-quantize llama-perplexity llama-gguf-split llama-batched-bench test-backend-ops
+
+      - name: Check every library resolves
+        run: bash scripts/check-ldd.sh build/bin '^libvulkan\.so'
+
+      - name: Correctness on lavapipe (CPU Vulkan) for the shader types the stack changes
+        run: |
+          cd build/bin
+          export GGML_VK_VISIBLE_DEVICES=0
+          ./llama-cli --list-devices
+          for t in q8_0 q6_K q3_K q5_0 mxfp4; do
+            timeout 1200 ./test-backend-ops -o MUL_MAT -b Vulkan0 -p "type_a=$t" > tbo-$t.log 2>&1 || { tail -30 tbo-$t.log; exit 1; }
+            echo "MUL_MAT $t: $(grep 'tests passed' tbo-$t.log | tail -1)"
+          done
+          rm -f tbo-*.log
+
+      - name: Run a tiny model on lavapipe
+        run: |
+          curl -sSL -o /tmp/stories260K.gguf https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K.gguf
+          cd build/bin
+          GGML_VK_VISIBLE_DEVICES=0 ./llama-completion -m /tmp/stories260K.gguf -dev Vulkan0 -ngl 99 -n 32 --temp 0 -no-cnv -p "Once upon a time" 2>/dev/null | tee /tmp/out.txt
+          [ "$(wc -c < /tmp/out.txt)" -gt 40 ]
+
+      - name: Pack
+        run: |
+          N=llama-b70-vulkan-ubuntu24-x64
+          mkdir -p build/bin/licenses && cp src/LICENSE build/bin/licenses/llama.cpp-LICENSE
+          cp scripts/README-binaries.md build/bin/README.md
+          cat > build/bin/BUILDINFO.txt <<EOF
+          backend: Vulkan (+ all CPU variants), Vulkan SDK $VULKAN_SDK_VERSION shaders
+          source: $VULKAN_REPO @ $VULKAN_SHA (branch vk-b70-stack: upstream master + B70 fixes)
+          builder: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          needs on the host: Mesa ANV (Vulkan loader libvulkan.so.1), glibc >= 2.39
+          EOF
+          tar -czf $N.tar.gz --transform "s,^\.,$N," -C build/bin .
+          sha256sum $N.tar.gz
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vulkan
+          path: llama-b70-vulkan-ubuntu24-x64.tar.gz
+          retention-days: 7
+
+  release:
+    needs: [sycl, vulkan]
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          grep -E '^[A-Z_]+=' refs.env >> "$GITHUB_ENV"; source refs.env
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          TAG="b70-$(date -u +%Y%m%d)-sycl-${SYCL_REF:0:9}-vk-${VULKAN_REF:0:9}"
+          gh release delete "$TAG" -y --cleanup-tag 2>/dev/null || true
+          {
+            echo "llama.cpp for the Intel Arc Pro B70 (Linux x86-64, glibc >= 2.39)."
+            echo
+            echo "- **SYCL**: $SYCL_REPO @ \`$SYCL_REF\`, AOT bmg-g31-a0, F16, oneDNN, oneAPI $ONEAPI_VERSION runtime bundled. Needs Intel compute-runtime (Level Zero) on the host."
+            echo "- **Vulkan**: $VULKAN_REPO \`vk-b70-stack\` @ \`$VULKAN_REF\` (upstream master + B70 decode/prefill fixes). Needs Mesa ANV."
+            echo
+            echo "Verify: \`sha256sum -c SHA256SUMS\`. Built by ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > notes.md
+          gh release create "$TAG" *.tar.gz SHA256SUMS --title "$TAG" --notes-file notes.md --latest
